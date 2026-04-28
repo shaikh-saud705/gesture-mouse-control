@@ -33,13 +33,41 @@ CAM_Y_MIN = 0.15
 CAM_Y_MAX = 0.85
 
 # ================= INIT =================
-hands = mp.solutions.hands.Hands(
-    max_num_hands=2,
-    model_complexity=1, # Maximizes accuracy (similar to using GPU model on backend)
-    min_detection_confidence=0.7,
-    min_tracking_confidence=0.7
-)
-draw = mp.solutions.drawing_utils
+if hasattr(mp, 'solutions'):
+    hands = mp.solutions.hands.Hands(
+        max_num_hands=2,
+        model_complexity=1,
+        min_detection_confidence=0.7,
+        min_tracking_confidence=0.7
+    )
+    draw = mp.solutions.drawing_utils
+    def _process(rgb): return hands.process(rgb)
+    def _draw(frame, lm): draw.draw_landmarks(frame, lm, mp.solutions.hands.HAND_CONNECTIONS)
+else:
+    from mediapipe.tasks import python as _mpt
+    from mediapipe.tasks.python import vision as _mpv
+    _MODEL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hand_landmarker.task")
+    _lmkr = _mpv.HandLandmarker.create_from_options(_mpv.HandLandmarkerOptions(
+        base_options=_mpt.BaseOptions(model_asset_path=_MODEL),
+        running_mode=_mpv.RunningMode.IMAGE, num_hands=2,
+        min_hand_detection_confidence=0.7, min_hand_presence_confidence=0.7, min_tracking_confidence=0.7))
+    class _R:
+        def __init__(self, lms, hnd): self.multi_hand_landmarks=lms; self.multi_handedness=hnd
+    class _LL:
+        def __init__(self, lm): self.landmark=lm
+    class _CL:
+        def __init__(self, l): self.classification=[type('C',(),{'label':l})()]
+    def _process(rgb):
+        r = _lmkr.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
+        if not r.hand_landmarks: return _R(None, None)
+        _f = {"Left":"Right","Right":"Left"}
+        return _R([_LL(lm) for lm in r.hand_landmarks], [_CL(_f.get(h[0].category_name,h[0].category_name)) for h in r.handedness])
+    def _draw(frame, lm):
+        if not lm: return
+        h,w,_=frame.shape; pts=[(int(l.x*w),int(l.y*h)) for l in lm.landmark]
+        for a,b in [(0,1),(1,2),(2,3),(3,4),(0,5),(5,6),(6,7),(7,8),(5,9),(9,10),(10,11),(11,12),(9,13),(13,14),(14,15),(15,16),(13,17),(17,18),(18,19),(19,20),(0,17)]:
+            cv2.line(frame,pts[a],pts[b],(0,200,0),2)
+        [cv2.circle(frame,p,4,(0,255,0),-1) for p in pts]
 
 session_type = os.environ.get('XDG_SESSION_TYPE', '').lower()
 print(f"Display server: {session_type}")
@@ -429,7 +457,7 @@ if __name__ == "__main__":
 
         # Removed the artificial frame limiting! MediaPipe can process 30+ FPS directly!
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        res = hands.process(rgb)
+        res = _process(rgb)
         
         t = time.time()
 
@@ -582,7 +610,7 @@ if __name__ == "__main__":
                             cv2.line(frame, (ix, iy), (tx, ty), (0, 255, 255), 4)
                             cv2.putText(frame, f"{vol_pct}%", (ix, iy - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
 
-                draw.draw_landmarks(frame, left_lm, mp.solutions.hands.HAND_CONNECTIONS)
+                _draw(frame, left_lm)
                 # BUG #2 FIX: Reuse lg from above instead of calling detect_left() a second time
                 cv2.putText(frame, f"L: {lg}", (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
             else:
@@ -765,7 +793,7 @@ if __name__ == "__main__":
                         print("R -> MIDDLE CLICK (Scroll Button)")
                         middle_click_triggered = True
 
-                draw.draw_landmarks(frame, right_lm, mp.solutions.hands.HAND_CONNECTIONS)
+                _draw(frame, right_lm)
                 cv2.putText(frame, f"R: {g}", (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         else:
             left_hand_first_seen = 0
